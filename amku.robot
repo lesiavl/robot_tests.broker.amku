@@ -5,6 +5,8 @@ Library   BuiltIn
 Library   amku_service.py
 Library   String
 
+#Test Timeout  5 min
+
 *** Variables ***
 ${global.timeout}   30
 ${timeout.onwait}   300
@@ -19,8 +21,6 @@ ${provider_password}  jdvornyk
 ${locator.new.complaints}                     xpath=(//*[@href="https://qa-claims-test.prozorro.gov.ua/backend/prozorro/claims/claimspending"])[2]
 ${locator.all.complaints}                       xpath=(//*[@href="https://qa-claims-test.prozorro.gov.ua/backend/prozorro/claims/claimspending"])[1]
 ${locator.amku.search.field}                xpath=//*[@id="Toolbar-listToolbar"]/div/div[2]/div/input
-#${locator.complaint.click.result}        xpath=//tr[@class="list-tree-level-0 good-claim rowlink"]
-#${locator.amku.tender.id.verific}           xpath=//td[@data-title=""]
 
 ${locator.amku.pending.accepted}            xpath=//button[@data-warning-button="#accepted-button"]
 ${locator.amku.accepted.satisfied}          xpath=//button[@data-warning-button="#satisfied-button"]
@@ -31,7 +31,7 @@ ${locator.amku.pending.mistaken}            xpath=//button[@data-warning-button=
 
 ${locator.tender.number}        xpath=//button[text()="№ закупівлі"]
 ${locator.tender.search}        xpath=//*[@id="blocks"]/div/input
-${locator.go.to.tender}         xpath=//a[@class="items-list--header"]/span
+${locator.go.to.tender}         xpath=//a[@class="items-list--header"]
 ${locator.get.tender.ID}        xpath=//div[@class="tender--head--inf"]
 
 
@@ -50,7 +50,8 @@ ${locator.get.tender.ID}        xpath=//div[@class="tender--head--inf"]
   Open Browser          ${USERS.users['${username}'].homepage}   ${USERS.users['${username}'].browser}  alias=${username}
   Set Window Size       @{USERS.users['${username}'].size}
   Set Window Position   @{USERS.users['${username}'].position}
-  Run Keyword If  '${username}' == 'amku_Viewer'  Login To AMKU cabinet  ${username}
+  Run Keyword If        '${username}' == 'amku_Viewer'  Login To AMKU cabinet  ${username}
+  Open Browser          https://qa23.prozorro.gov.ua/tender/search/       browser=chrome       alias=prozorro
 
 
 Login To AMKU cabinet
@@ -75,7 +76,20 @@ Login To AMKU cabinet
   Wait Until Element Is Visible     xpath=//*[contains(text(), "${tender_uaid}")]   30     error=No complaint
   Click Element                     xpath=//tr[@class="list-tree-level-0 good-claim rowlink"]              #xpath=//*[contains(text(), "${tender_uaid}")]
   Wait Until Element Is Visible     id=Form-field-Claim-complaint_complaintID   ${global.timeout}  error=No complaint
-#  Register Keyword To Run On Failure    Пошук скарги по ідентифікатору
+
+
+Пошук тендера по ідентифікатору на порталі Prozorro
+  [Arguments]  ${TENDER_UAID}  ${username}
+  [Documentation]  Пошук тендера на порталі Prozorro
+  Switch Browser                    prozorro
+  Click Element                     ${locator.tender.number}
+  Input Text                        ${locator.tender.search}            ${TENDER_UAID}
+  Sleep  5                          #Without sleep can't find the tender
+  Wait Until Element Is Visible     xpath=//*[@href="/tender/${TENDER_UAID}/"]   30  error=NO TENDER ON THIS PAGE
+  Click Element                     xpath=//*[@href="/tender/${TENDER_UAID}/"]
+  ${tender.id.verific} =            Get Text                            ${locator.get.tender.ID}
+  ${tender.id.verific} =            ${tender.id.verific.split(' ')}
+  Page Should Contain Element       ${tender.id.verific[0]}     ${TENDER_UAID}
 
 
 Оновити сторінку з тендером
@@ -84,36 +98,58 @@ Login To AMKU cabinet
   Reload Page
 
 
-Отримати текст із поля
-  [Arguments]  ${field_name}
-  Wait Until Page Contains Element  ${field_name}  ${global.timeout}   error=No Such Element On Page
-  ${return_value}=  Get Text  ${field_name}
+Отримати статус із поля
+  [Timeout]  300 seconds
+  [Arguments]  ${username}  ${tender_uaid}  ${tender_data}  ${field_name}
+  ${complaints}=  Get Variable Value   ${USERS.users['${username}'].tender_data.data.complaints}
+#  ${complaint_indecx}=   get_complaint_index_by_id   ${tender_data}
+  ${field_value}=       Get Variable Value    ${complaints[0]['${field_name}']}
+  [Return]  ${field_value}
+
+
+Отримати інформацію із status
+  [Arguments]        ${field_name}
+  ${return_value} =  Get Text     xpath=//div[@class="marked"]
+  ${return_value} =  Convert To String          ${return_value}
+  [Return]  ${return_value}
+
+
+Setting status due to tag
+  [Documentation]  Використовується для порівняння статусу скарги згідно поточного тегу в тесті
+  @{current_tags} =   Get Variables  @{TEST TAGS}
+  ${expected_status}=  Set Variable If  'accept_tender_complaint'  in  '@{current_tags[-1]}'   u'Прийнята до розгляду'
+  ${expected_status}=  Set Variable If  'decline_tender_complaint' in  '@{current_tags[-1]}'   u'Не задоволена'
+  ${expected_status}=  Set Variable If  'satisfy_tender_complaint' in  '@{current_tags[-1]}'   u'Задоволена'
+  ${expected_status}=  Set Variable If  'stop_tender_complaint'    in  '@{current_tags[-1]}'   u'Розгляд припинено'
+  ${expected_status}=  Set Variable If  'return_mistaken_tender_complaint'  in  '@{current_tags[-1]}'   u'Повернуто, як помилково направлену'
+  ${expected_status}=  Set Variable If  'invalidate_tender_complaint'       in  '@{current_tags[-1]}'   u'Залишено без розгляду'
+  [Return]  ${expected_status}
+
+
+Handling statuses
+  [Documentation]  Використовується для порівняння статусу скарги згідно complaint_data
+  ${expected_status}=  Setting status due to tag
+  ${return_value}=  Set Variable If  ${expected_status} == u'Прийнята до розгляду'   'accepted'
+  ${return_value}=  Set Variable If  ${expected_status} == u'Не задоволена'          'declined'
+  ${return_value}=  Set Variable If  ${expected_status} == u'Задоволена'             'satisfied'
+  ${return_value}=  Set Variable If  ${expected_status} == u'Розгляд припинено'      'stopped'
+  ${return_value}=  Set Variable If  ${expected_status} == u'Повернуто, як помилково направлену'  'mistaken'
+  ${return_value}=  Set Variable If  ${expected_status} == u'Залишено без розгляду'               'invalid'
   [Return]  ${return_value}
 
 
 Отримати інформацію із скарги
-  [Arguments]  ${tender_uaid}  ${username}  ${complaintID}  ${field_name}  ${award_index}
-  Switch Browser  ${username}
-  amku.Пошук скарги по ідентифікатору    ${tender_uaid}     ${username}
-  Wait Until Element Is Visible     xpath=//*[contains(text(), "${tender_uaid}")]     ${global.timeout}  error=No complaint
-  Click Element                     xpath=//*[contains(text(), "${tender_uaid}")]
-  Wait Until Element Is Visible     ${field_name}            ${global.timeout}   error=element is not visible
-  ${return_value}=  Run Keyword     Отримати інформацію із поля
-  [Return]  ${return_value}
-
-
-Пошук тендера по ідентифікатору на порталі Prozorro
-  [Arguments]  ${TENDER_UAID}  ${username}
-  [Documentation]  Пошук тендера на порталі Prozorro
-  Open Browser                  https://qa23.prozorro.gov.ua/tender/search/       browser=chrome       alias=prozorro
-  Click Button                  ${locator.tender.number}
-  Input Text                    ${locator.tender.search}            ${TENDER_UAID}
-  Wait Until Page Contains      ${TENDER_UAID}                      ${timeout.onwait}   error=NO TENDER ON THIS PAGE
+  [Arguments]  ${tender_uaid}  ${username}  ${tender_data}  ${complaintID}  ${field_name}  ${award_index}=${None}
+  [Documentation]   Перевірка статусу скарги на сторінці тендера
+  amku.Пошук тендера по ідентифікатору на порталі Prozorro      ${username}     ${TENDER_UAID}
   Reload Page
-  Sleep  3   #Without sleep can't find the tender
-  Click Element                 xpath=//*[@href="/tender/${TENDER_UAID}/"]
-  ${tender.id.verific}=         Get Text                            ${locator.get.tender.ID}
-  Page Should Contain Element   ${tender.id.verific.split(' ')[0]}  ${TENDER_UAID}
+  Run Keyword If Test Failed    Пошук тендера по ідентифікатору на порталі Prozorro   ${username}     ${TENDER_UAID}
+  Execute Javascript  window.scrollTo(0, 1378)
+  ${expected_status} =  Setting status due to tag
+  ${actual_status} =    Отримати інформацію із status   ${field_name}
+  Should Be Equal As Strings   ${actual_status}         ${expected_status}      message=${actual_status} and ${expected_status} do not match on Prozorro.
+  ${return_value} =     Handling statuses
+  [Return]  ${return_value}
 
 
 ################################################
@@ -123,7 +159,6 @@ Login To AMKU cabinet
 Перевести скаргу в статус 'pending --> accepted'
   [Arguments]  ${tender_uaid}  ${username}
   [Documentation]   Перехід скарги в статус ACCEPTED/DECLINED (ПРИЙНЯТО ДО РОЗГЛЯДУ)
- # amku.Пошук скарги по ідентифікатору   ${tender_uaid}     ${username}
   Execute Javascript                    window.scrollTo(0, 264)
   Click Element                         ${locator.amku.pending.accepted}
   Wait Until Element Is Visible         xpath=//div[@class="modal-body"]                ${global.timeout}
@@ -211,34 +246,10 @@ Login To AMKU cabinet
   Wait Until Element Is Visible         xpath=//div[@class="modal-body"]                            ${global.timeout}
   Click Element                         xpath=//input[@name="checkbox"]//following-sibling::label
   Element Text Should Be                id=warning-title                                            ПОВЕРНУТИ, ЯК ПОМИЛКОВО НАПРАВЛЕНЕ ПОВІДОМЛЕННЯ
-  Wait Until Element Is Visible         xpath=//div[@class="modal-body"]                            ${global.timeout}       error= Pending ==> Mistaken
+  Wait Until Element Is Visible         xpath=//div[@class="modal-body"]                            ${global.timeout}   error= Pending ==> Mistaken
   Click Element                         xpath=//input[@name="checkbox"]//following-sibling::label
   Wait Until Element Is Enabled         xpath=//*[@id="mistaken-button"]/button[1]                  ${global.timeout}
   Click Element                         xpath=//*[@id="mistaken-button"]/button[1]
-  Wait Until Element Is Visible         xpath//input[@name="Claim[statusTranslated]"]               ${global.timeout}       error= Status not visible
+  Wait Until Element Is Visible         xpath//input[@name="Claim[statusTranslated]"]               ${global.timeout}   error= Status not visible
   Page Should Contain Element           xpath=//input[@value="Повернуто, як помилково направлене повідомлення"]         message=No Element Повернуто, як помилково направлене повідомлення
 
-
-Handling statuses
-  @{current_tags}=   Get Variable Value  @{TEST TAGS}
-  ${expected_status}=  Set Variable    ${EMPTY}
-  Set Variable If  'accept_tender_complaint' in     '@{current_tags[-1]}'    ${expected_status} == u'Прийнята до розгляду'
-  Set Variable If  'decline_tender_complaint' in    '@{current_tags[-1]}'    ${expected_status} == u'Не задоволена'
-  Set Variable If  'satisfy_tender_complaint' in    '@{current_tags[-1]}'    ${expected_status} == u'Задоволена'
-  Set Variable If  'stop_tender_complaint'    in    '@{current_tags[-1]}'    ${expected_status} == u'Розгляд припинено'
-  Set Variable If  'return_mistaken_tender_complaint' in '@{current_tags[-1]}'  ${expected_status} == u'Повернуто, як помилково направлену'
-  Set Variable If  'invalidate_tender_complaint' in '@{current_tags[-1]}'  ${expected_status} == u'Залишено без розгляду'
-  [Return]  ${expected_status}
-
-
-Звірити відображення поля status скарги із поля для користувача
-  [Arguments]  ${tender_uaid}  ${username}
-  [Documentation]   Перевірка статусу скарги на сторінці тендера
-  amku.Пошук тендера по ідентифікатору на порталі Prozorro  ${username}  ${TENDER_UAID}
-  Click Element     ${locator.go.to.tender}
-  Wait Until Element Contains           ${locator.get.tender.ID}  ${TENDER_UAID}  ${global.timeout}  error=NO TENDER ON THIS PAGE
-  Execute Javascript  window.scrollTo(0, 1378)
-  ${expected_status}=  Handling statuses
-  ${actual_status}=  Get Text  xpath=//div[@class="marked"]
-  ${actual_status}=  Convert To String  ${actual_status}
-  Should Be Equal As Strings   ${actual_status}    ${expected_status}   message=${actual_status} and ${expected_status} do not match on Prozorro.Test Failed.
